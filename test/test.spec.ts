@@ -68,6 +68,7 @@ describe('Evaluate submission', () => {
         });
         const coinView = new CoinView();
         coinView.addCoin(coin);
+        console.log(tx.check(coinView));
         expect(tx.verify(coinView)).toBe(true);
     });
 });
