@@ -6,14 +6,15 @@ use bitcoin::ecdsa;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::Hash;
 use bitcoin::opcodes::OP_0;
-use bitcoin::script::Builder;
+use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::sighash::SighashCache;
 use bitcoin::transaction::Version;
 use bitcoin::{
     Address, Amount, EcdsaSighashType, Network, OutPoint, PrivateKey, ScriptBuf, Transaction, TxIn,
     TxOut, Txid, Witness, PublicKey
 };
-use secp256k1::{Message, Secp256k1};
+mod raj;
+use secp256k1::{Message, Secp256k1, SecretKey};
 fn main() {
     let private_key_1 = PrivateKey::from_slice(
         &<[u8; 32]>::from_hex("39dc0a9f0b185a2ee56349691f34716e6e0cda06a7f9707742ac113c4e2317bf")
@@ -21,6 +22,14 @@ fn main() {
         Network::Bitcoin,
     )
     .unwrap();
+    let privkey_1 =
+        SecretKey::from_str("39dc0a9f0b185a2ee56349691f34716e6e0cda06a7f9707742ac113c4e2317bf")
+            .unwrap();
+
+    let test_priv_key = PrivateKey::new(privkey_1, Network::Bitcoin);
+
+    assert_eq!(private_key_1, test_priv_key);
+
     let private_key_2 = PrivateKey::from_slice(
         &<[u8; 32]>::from_hex("5077ccd9c558b7d04a81920d38aa11b4a9f9de3b23fab45c3ef28039920fdd6d")
             .unwrap(),
@@ -31,12 +40,7 @@ fn main() {
     let address: Address<NetworkUnchecked> = "325UUecEQuyrTd28Xs2hvAxdAjHM7XzqVF".parse().unwrap();
     let address: Address<NetworkChecked> = address.require_network(Network::Bitcoin).unwrap();
 
-    let redeem_script_bytes = &<[u8; 71]>::from_hex("5221032ff8c5df0bc00fe1ac2319c3b8070d6d1e04cfbf4fedda499ae7b775185ad53b21039bbc8d24f89e5bc44c5b0d1980d6658316a6b2440023117c3c03a4975b04dd5652ae").unwrap();
-    let redeem_script = ScriptBuf::from_bytes(redeem_script_bytes.to_vec());
-
-    let derived_address = Address::p2shwsh(&redeem_script, Network::Bitcoin);
-
-    assert_eq!(address, derived_address);
+    let redeem_script = ScriptBuf::from_hex("5221032ff8c5df0bc00fe1ac2319c3b8070d6d1e04cfbf4fedda499ae7b775185ad53b21039bbc8d24f89e5bc44c5b0d1980d6658316a6b2440023117c3c03a4975b04dd5652ae").unwrap();
 
     let txin = TxIn {
         previous_output: OutPoint {
@@ -68,7 +72,7 @@ fn main() {
     // Calculate the sighash and sign with both private keys
     let mut sig_hash_cache = SighashCache::new(&tx);
     let sighash = sig_hash_cache
-        .p2wsh_signature_hash(0, &address.script_pubkey(), spending_amount, EcdsaSighashType::All)
+        .p2wsh_signature_hash(0, &redeem_script, spending_amount, EcdsaSighashType::All)
         .unwrap();
     let digest = sighash.to_byte_array();
     let message = Message::from_digest(digest);
@@ -82,22 +86,19 @@ fn main() {
     let e_sig1 = ecdsa::Signature::sighash_all(sig1);
     let e_sig2 = ecdsa::Signature::sighash_all(sig2);
 
-    let e_sig1_71 = <[u8; 71]>::try_from(e_sig1.serialize().as_ref()).unwrap();
-    let e_sig2_71 = <[u8; 71]>::try_from(e_sig2.serialize().as_ref()).unwrap();
-    let script_sig_builder = Builder::new()
-        .push_opcode(OP_0)
-        .push_slice(e_sig1_71)
-        .push_slice(e_sig2_71)
-        .push_slice(redeem_script_bytes);
-    let script_sig = script_sig_builder.into_script();
+    let mut script_sig = ScriptBuf::new();
+    let mut push_bytes = PushBytesBuf::new();
+    push_bytes
+        .extend_from_slice(redeem_script.to_p2wsh().as_bytes())
+        .unwrap();
+    script_sig.push_slice(push_bytes);
 
     // Create the witness stack
     let mut witness_stack = Witness::new();
-    witness_stack.push(<[u8; 1]>::from_hex("04").unwrap());
-    witness_stack.push(<[u8; 1]>::from_hex("00").unwrap());
-    witness_stack.push_ecdsa_signature(&ecdsa::Signature::sighash_all(sig1));
-    witness_stack.push_ecdsa_signature(&ecdsa::Signature::sighash_all(sig2));
-    witness_stack.push(redeem_script_bytes);
+    witness_stack.push(Vec::new());
+    witness_stack.push_ecdsa_signature(&e_sig2);
+    witness_stack.push_ecdsa_signature(&e_sig1);
+    witness_stack.push(redeem_script);
 
     // Update the transaction with the script_sig and witness stack
     let txin_final = TxIn {
